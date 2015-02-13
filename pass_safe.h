@@ -32,7 +32,8 @@
 // Editing database
 #define DB_FILE_EXISTS 5
 #define DB_RECORD_EXISTS 6
-#define DB_NO_RECORDS 7
+#define DB_RECORD_NOT_FOUND 7
+#define DB_NO_RECORDS 8
 
 gcry_error_t error;
 
@@ -65,10 +66,13 @@ typedef struct db_handle
 
 void init_gcrypt();
 char * generate_key(char *password, char *salt);
+int generate_pass(unsigned char **pass_buff, int length);
 
-int create_pass_safe(char *filename, char *password, db_handle_t *handle);
+int create_pass_db(char *filename, char *password, db_handle_t *handle);
 int open_pass_db(char *infilename, char *password, db_handle_t *handle);
+
 int create_db_record(char *name, int size, db_handle_t *handle);
+int delete_db_record(char *name, db_handle_t *handle);
 
 int write_handle(db_handle_t *handle);
 

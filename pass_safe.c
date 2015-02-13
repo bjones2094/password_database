@@ -29,6 +29,74 @@ char * generate_key(char *password, char *salt)
 	return digest;
 }
 
+// Generate a random password length bytes long
+// Returns length of actual password block
+int generate_pass(unsigned char **pass_buff, int length)
+{
+	int password_block_length = (length + 1) % AES_BLOCK_LENGTH ? length + 1 + AES_BLOCK_LENGTH - ((length + 1) % AES_BLOCK_LENGTH) : length + 1;
+	*pass_buff = malloc(password_block_length);
+	gcry_randomize(*pass_buff, password_block_length, GCRY_STRONG_RANDOM);
+			
+	// Make password characters readable 
+	int i;
+	for(i = 0; i < length; i++)
+	{
+		(*pass_buff)[i] = (*pass_buff)[i] % ('~' - ' ') + ' ';
+	}
+	
+	// Pad end of password with null terminators
+	for(i = length; i < password_block_length; i++)
+	{
+		(*pass_buff)[i] = '\0';
+	}
+	
+	return password_block_length;
+}
+
+// Create a new password database file and initialize database handle
+int create_pass_db(char *filename, char *password, db_handle_t *handle)
+{
+	if(access(filename, F_OK) != -1)
+	{
+		return DB_FILE_EXISTS;
+	}
+	
+	// Generate random salt for key generation
+	char salt[SALT_LENGTH];
+	gcry_randomize(salt, SALT_LENGTH, GCRY_STRONG_RANDOM);
+		
+	// Generate random initialization vector for encrypting
+	char iv[IV_LENGTH];
+	gcry_randomize(iv, IV_LENGTH, GCRY_STRONG_RANDOM);
+		
+	char *key = generate_key(password, salt);
+		
+	// Initialize cipher handle for encryption/decryption
+	gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
+	gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
+	gcry_cipher_setiv(handle->crypt_handle, iv, IV_LENGTH);
+		
+	// Initialize db header struct
+	handle->filename = malloc(strlen(filename) + 1);
+	strcpy(handle->filename, filename);
+		
+	handle->num_records = 0;
+	handle->last_edit = time(NULL);
+		
+	handle->salt = malloc(SALT_LENGTH);
+	memcpy(handle->salt, salt, SALT_LENGTH);
+		
+	handle->iv = malloc(IV_LENGTH);
+	memcpy(handle->iv, iv, IV_LENGTH);
+		
+	handle->pass_headers = NULL;
+	handle->pass_data = NULL;
+	handle->pass_data_size = 0;
+		
+	// Write handle to file
+	return write_handle(handle);
+}
+
 // Open an existing password database
 int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 {
@@ -95,7 +163,6 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		strcpy(handle->filename, infilename);
 		handle->last_edit = time(NULL);
 		
-		
 		if(handle->num_records > 0)
 		{
 			// Read and decrypt password header data into pass_header structs
@@ -134,6 +201,116 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		}
 		return 0;
 	}
+}
+
+// Add a new password record to an exisiting database
+int create_db_record(char *name, int pass_size, db_handle_t *handle)
+{
+	if(find_record(name, handle))
+	{
+		return DB_RECORD_EXISTS;
+	}
+	
+	// Create new password header
+	pass_header_t new_pass_header;
+	strcpy(new_pass_header.name, name);
+	
+	// Pad end of name with null terminators
+	int i;
+	for(i = strlen(new_pass_header.name); i < sizeof(new_pass_header.name); i++)
+	{
+		new_pass_header.name[i] = '\0';
+	}
+	
+	new_pass_header.record_start = handle->pass_data_size;
+	
+	// Generate random password
+	unsigned char *password_block;
+	int password_block_length = generate_pass(&password_block, pass_size);
+	
+	// Encrypt password block in place
+	error = gcry_cipher_encrypt(handle->crypt_handle, password_block, password_block_length, NULL, 0);
+	if(error)
+	{
+		printf("%s\n", gcry_strerror(error));
+		exit(EXIT_FAILURE);
+	}
+	
+	// Add new password data to current handle data
+	if(handle->num_records == 0)
+	{
+		handle->pass_data = malloc(password_block_length);
+		memcpy(handle->pass_data, password_block, password_block_length);
+	}
+	else
+	{
+		char *new_pass_data = malloc(handle->pass_data_size + password_block_length);
+		memcpy(new_pass_data, handle->pass_data, handle->pass_data_size);
+		memcpy(new_pass_data + handle->pass_data_size, password_block, password_block_length);
+		
+		free(handle->pass_data);
+		handle->pass_data = new_pass_data;
+	}
+	handle->pass_data_size += password_block_length;
+	
+	// Add new password header to handle headers
+	new_pass_header.size = password_block_length;
+	if(handle->num_records == 0)
+	{
+		handle->pass_headers = malloc(sizeof(pass_header_t));
+	}
+	else
+	{
+		pass_header_t *new_headers = malloc(sizeof(pass_header_t) * (handle->num_records + 1));
+		memcpy(new_headers, handle->pass_headers, sizeof(pass_header_t) * handle->num_records);
+	
+		free(handle->pass_headers);
+		handle->pass_headers = new_headers;
+	}
+	handle->num_records++;
+	handle->pass_headers[handle->num_records - 1] = new_pass_header;
+	
+	return write_handle(handle);
+}
+
+// Remove a password record from an existing database
+int delete_db_record(char *name, db_handle_t *handle)
+{
+	int location;
+	if(location = find_record(name, handle))
+	{
+		return DB_RECORD_NOT_FOUND;
+	}
+	
+	pass_header_t header = handle->pass_headers[location];
+	int record_end = header.record_start + header.size;
+	
+	// Remove password data from handle
+	char *new_pass_data = malloc(handle->pass_data_size - header.size);
+	memcpy(new_pass_data, handle->pass_data, header.record_start);
+	memcpy(new_pass_data, handle->pass_data + record_end, handle->pass_data_size - record_end);
+	
+	free(handle->pass_data);
+	handle->pass_data = new_pass_data;
+	
+	// Remove appropriate password header from handle
+	pass_header_t *new_headers = malloc(sizeof(pass_header_t) * (handle->num_records - 1));
+	int i;
+	for(i = 0; i < location; i++)
+	{
+		new_headers[i] = handle->pass_headers[i];
+	}
+	for(i = location; i < handle->num_records - 1; i++)
+	{
+		new_headers[i] = handle->pass_headers[i + 1];
+		new_headers[i].record_start -= header.size;	// Fix header record starts
+	}
+	
+	free(handle->pass_headers);
+	handle->pass_headers = new_headers;
+	handle->num_records--;
+	
+	return write_handle(handle);
 }
 
 // Write state of password database provided by db_handle to appropriate database file
@@ -194,137 +371,6 @@ int write_handle(db_handle_t *handle)
 	return 0;
 }
 
-// Create a new password database file and initialize database handle
-int create_pass_safe(char *filename, char *password, db_handle_t *handle)
-{
-	if(access(filename, F_OK) != -1)
-	{
-		return DB_FILE_EXISTS;
-	}
-	
-	// Generate random salt for key generation
-	char salt[SALT_LENGTH];
-	gcry_randomize(salt, SALT_LENGTH, GCRY_STRONG_RANDOM);
-		
-	// Generate random initialization vector for encrypting
-	char iv[IV_LENGTH];
-	gcry_randomize(iv, IV_LENGTH, GCRY_STRONG_RANDOM);
-		
-	char *key = generate_key(password, salt);
-		
-	// Initialize cipher handle for encryption/decryption
-	gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
-	gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
-	gcry_cipher_setiv(handle->crypt_handle, iv, IV_LENGTH);
-		
-	// Initialize db header struct
-	handle->filename = malloc(strlen(filename) + 1);
-	strcpy(handle->filename, filename);
-		
-	handle->num_records = 0;
-	handle->last_edit = time(NULL);
-		
-	handle->salt = malloc(SALT_LENGTH);
-	memcpy(handle->salt, salt, SALT_LENGTH);
-		
-	handle->iv = malloc(IV_LENGTH);
-	memcpy(handle->iv, iv, IV_LENGTH);
-		
-	handle->pass_headers = NULL;
-	handle->pass_data = NULL;
-	handle->pass_data_size = 0;
-		
-	// Write handle to file
-	return write_handle(handle);
-}
-
-// Add a new password record to an exisiting database
-int create_db_record(char *name, int pass_size, db_handle_t *handle)
-{
-	if(find_record(name, handle))
-	{
-		return DB_RECORD_EXISTS;
-	}
-	
-	// Create new password header
-	pass_header_t new_pass_header;
-	strcpy(new_pass_header.name, name);
-	
-	// Pad end of name with null terminators
-	int i;
-	for(i = strlen(new_pass_header.name); i < sizeof(new_pass_header.name); i++)
-	{
-		new_pass_header.name[i] = '\0';
-	}
-	
-	new_pass_header.record_start = handle->pass_data_size;
-	
-	// Generate new random password of pass_size bytes
-	unsigned char new_password[pass_size];
-	gcry_randomize(new_password, pass_size, GCRY_STRONG_RANDOM);
-			
-	// Make every character readable 
-	for(i = 0; i < pass_size; i++)
-	{
-		new_password[i] = new_password[i] % ('~' - ' ') + ' ';
-	}
-	
-	// Fit new password into a block of a size divisible by AES block size
-	long password_block_length = (pass_size + 1) % AES_BLOCK_LENGTH ? pass_size + 1 + AES_BLOCK_LENGTH - ((pass_size + 1) % AES_BLOCK_LENGTH) : pass_size + 1;
-	char password_block[password_block_length];
-	memcpy(password_block, new_password, pass_size);
-	
-	// Pad end of password with null terminators
-	for(i = pass_size; i < password_block_length; i++)
-	{
-		password_block[i] = '\0';
-	}
-	
-	// Encrypt password block in place
-	error = gcry_cipher_encrypt(handle->crypt_handle, password_block, password_block_length, NULL, 0);
-	if(error)
-	{
-		printf("%s\n", gcry_strerror(error));
-		exit(EXIT_FAILURE);
-	}
-	
-	// Add new password data to current handle data
-	if(handle->num_records == 0)
-	{
-		handle->pass_data = malloc(password_block_length);
-		memcpy(handle->pass_data, password_block, password_block_length);
-	}
-	else
-	{
-		char *new_pass_data = malloc(handle->pass_data_size + password_block_length);
-		memcpy(new_pass_data, handle->pass_data, handle->pass_data_size);
-		memcpy(new_pass_data + handle->pass_data_size, password_block, password_block_length);
-		
-		free(handle->pass_data);
-		handle->pass_data = new_pass_data;
-	}
-	handle->pass_data_size += password_block_length;
-	
-	// Add new password header to handle headers
-	new_pass_header.size = password_block_length;
-	if(handle->num_records == 0)
-	{
-		handle->pass_headers = malloc(sizeof(pass_header_t));
-	}
-	else
-	{
-		pass_header_t *new_headers = malloc(sizeof(pass_header_t) * (handle->num_records + 1));
-		memcpy(new_headers, handle->pass_headers, sizeof(pass_header_t) * handle->num_records);
-	
-		free(handle->pass_headers);
-		handle->pass_headers = new_headers;
-	}
-	handle->num_records++;
-	handle->pass_headers[handle->num_records - 1] = new_pass_header;
-	
-	return write_handle(handle);
-}
-
 // Retrieve a password from an opened database
 char * get_pass(char *name, db_handle_t *handle)
 {
@@ -367,7 +413,7 @@ int find_record(char *name, db_handle_t *handle)
 	{
 		if(!strcmp(name, handle->pass_headers[i].name))
 		{
-			return 1;
+			return i;
 		}
 	}
 	return 0;
@@ -384,7 +430,8 @@ int list_records(db_handle_t *handle)
 	int i;
 	for(i = 0; i < handle->num_records; i++)
 	{
-		printf("Name: %s, ", handle->pass_headers[i].name);
-		printf("Size: %s\n", handle->pass_headers[i].size);
+		printf("%s\n", handle->pass_headers[i].name);
 	}
+	printf("\n");
+	return 0;
 }
