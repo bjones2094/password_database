@@ -34,6 +34,7 @@
 #define DB_RECORD_EXISTS 6
 #define DB_RECORD_NOT_FOUND 7
 #define DB_NO_RECORDS 8
+#define DB_RECORD_LIMIT_REACHED 9
 
 gcry_error_t error;
 
@@ -65,6 +66,7 @@ typedef struct db_handle
 } db_handle_t;
 
 void init_gcrypt();
+
 char * generate_key(char *password, char *salt);
 int generate_pass(unsigned char **pass_buff, int length);
 
@@ -75,6 +77,7 @@ int create_db_record(char *name, int size, db_handle_t *handle);
 int delete_db_record(char *name, db_handle_t *handle);
 
 int write_handle(db_handle_t *handle);
+void close_handle(db_handle_t *handle);
 
 char * get_pass(char *name, db_handle_t *handle);
 int find_record(char *name, db_handle_t *handle);

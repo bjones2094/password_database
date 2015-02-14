@@ -136,6 +136,8 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
 		gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 		
+		free(key);
+		
 		// Read and decrypt database header from next 16 bytes
 		char db_header[AES_BLOCK_LENGTH];
 		fread(db_header, AES_BLOCK_LENGTH, 1, infile);
@@ -210,6 +212,10 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 	{
 		return DB_RECORD_EXISTS;
 	}
+	else if(handle->num_records == 1000)
+	{
+		return DB_RECORD_LIMIT_REACHED;
+	}
 	
 	// Create new password header
 	pass_header_t new_pass_header;
@@ -252,6 +258,7 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 		handle->pass_data = new_pass_data;
 	}
 	handle->pass_data_size += password_block_length;
+	free(password_block);
 	
 	// Add new password header to handle headers
 	new_pass_header.size = password_block_length;
@@ -371,6 +378,20 @@ int write_handle(db_handle_t *handle)
 	return 0;
 }
 
+// Clean up memory from db handle
+void close_handle(db_handle_t *handle)
+{
+	// Zero out decrypted password header data
+	memset(handle->pass_headers, 0, sizeof(pass_header_t) * handle->num_records);
+	
+	free(handle->filename);
+	free(handle->salt);
+	free(handle->iv);
+	free(handle->pass_headers);
+	free(handle->pass_data);
+	gcry_cipher_close(handle->crypt_handle);
+}
+
 // Retrieve a password from an opened database
 char * get_pass(char *name, db_handle_t *handle)
 {
@@ -432,6 +453,5 @@ int list_records(db_handle_t *handle)
 	{
 		printf("%s\n", handle->pass_headers[i].name);
 	}
-	printf("\n");
 	return 0;
 }

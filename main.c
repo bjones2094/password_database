@@ -8,9 +8,10 @@ void print_help()
 	
 	printf("Commands:\n");
 	printf("    create | Create a new password database\n");
-	printf("    add    | Add a new password to a database\n");
-	printf("    get    | Get a password from a database\n");
-	printf("    list   | List all passwords in a database\n");
+	printf("    add    | Add a new password to the database\n");
+	printf("    remove | Remove a password from the database\n");
+	printf("    get    | Get a password from the database\n");
+	printf("    list   | List all passwords in the database\n");
 	printf("    help   | Print help page\n\n");
 	
 	printf("Examples:\n");
@@ -41,8 +42,8 @@ int main(int argc, char **argv)
 			password[MAX_PASS_LENGTH - 1] = '\0';
 			
 			int error_code;
-			db_handle_t *handle = malloc(sizeof(db_handle_t));
-			if(error_code = open_pass_db(argv[2], password, handle))
+			db_handle_t handle;
+			if(error_code = open_pass_db(argv[2], password, &handle))
 			{
 				switch(error_code)
 				{
@@ -63,10 +64,11 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				char *output = get_pass(argv[3], handle);
+				char *output = get_pass(argv[3], &handle);
 				if(output)
 				{
 					printf("%s\n", output);
+					memset(output, 0, sizeof(output));
 				}
 				else
 				{
@@ -90,8 +92,8 @@ int main(int argc, char **argv)
 			password[MAX_PASS_LENGTH - 1] = '\0';
 			
 			int error_code;
-			db_handle_t *handle = malloc(sizeof(db_handle_t));
-			if(error_code = create_pass_db(argv[2], password, handle))
+			db_handle_t handle;
+			if(error_code = create_pass_db(argv[2], password, &handle))
 			{
 				switch(error_code)
 				{
@@ -125,8 +127,8 @@ int main(int argc, char **argv)
 			password[MAX_PASS_LENGTH - 1] = '\0';
 			
 			int error_code;
-			db_handle_t *handle = malloc(sizeof(db_handle_t));
-			if(error_code = open_pass_db(argv[2], password, handle))
+			db_handle_t handle;
+			if(error_code = open_pass_db(argv[2], password, &handle))
 			{
 				switch(error_code)
 				{
@@ -161,7 +163,7 @@ int main(int argc, char **argv)
 					pass_size = atoi(input);
 				}
 				
-				error_code = create_db_record(argv[3], pass_size, handle);
+				error_code = create_db_record(argv[3], pass_size, &handle);
 				switch(error_code)
 				{
 					case DB_RECORD_EXISTS:
@@ -170,6 +172,10 @@ int main(int argc, char **argv)
 						break;
 					case DB_FILE_OPEN_ERROR:
 						printf("An error occured when writing to the database\n");
+						return 1;
+						break;
+					case DB_RECORD_LIMIT_REACHED:
+						printf("This database has reached its maximum capacity (1000 records)\n");
 						return 1;
 						break;
 				}
@@ -193,8 +199,8 @@ int main(int argc, char **argv)
 			password[MAX_PASS_LENGTH - 1] = '\0';
 			
 			int error_code;
-			db_handle_t *handle = malloc(sizeof(db_handle_t));
-			if(error_code = open_pass_db(argv[2], password, handle))
+			db_handle_t handle;
+			if(error_code = open_pass_db(argv[2], password, &handle))
 			{
 				switch(error_code)
 				{
@@ -215,7 +221,7 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				error_code = delete_db_record(argv[3], handle);
+				error_code = delete_db_record(argv[3], &handle);
 				switch(error_code)
 				{
 					case DB_RECORD_NOT_FOUND:
@@ -229,6 +235,7 @@ int main(int argc, char **argv)
 				}
 				
 				printf("Password successfully removed from database\n");
+				close_handle(&handle);
 				return 0;
 			}
 		}
@@ -247,8 +254,8 @@ int main(int argc, char **argv)
 			password[MAX_PASS_LENGTH - 1] = '\0';
 			
 			int error_code;
-			db_handle_t *handle = malloc(sizeof(db_handle_t));
-			if(error_code = open_pass_db(argv[2], password, handle))
+			db_handle_t handle;
+			if(error_code = open_pass_db(argv[2], password, &handle))
 			{
 				switch(error_code)
 				{
@@ -269,12 +276,12 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				printf("\n");
-				if(list_records(handle))
+				if(list_records(&handle))
 				{
 					printf("This database has no records in it\n");
 					return 1;
 				}
+				close_handle(&handle);
 				return 0;
 			}
 		}
