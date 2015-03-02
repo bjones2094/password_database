@@ -66,7 +66,7 @@ int create_pass_db(char *filename, char *password, db_handle_t *handle)
     gcry_kdf_derive(password, strlen(password), GCRY_KDF_SCRYPT, KEY_GEN_N, salt, SALT_LENGTH, KEY_GEN_P, KEY_SIZE, key);
 		
 	// Initialize cipher handle for encryption/decryption
-	gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
+    gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_CBC, 0);
 	gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
 	gcry_cipher_setiv(handle->crypt_handle, iv, IV_LENGTH);
 		
@@ -128,7 +128,7 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
         gcry_kdf_derive(password, strlen(password), GCRY_KDF_SCRYPT, KEY_GEN_N, handle->salt, SALT_LENGTH, KEY_GEN_P, KEY_SIZE, key);
 		
 		// Initialize cipher handle for encryption/decryption
-		gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
+        gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_CBC, 0);
 		gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
 		gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 		
@@ -232,6 +232,9 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 	int password_block_length = generate_pass(&password_block, pass_size);
 	
 	// Encrypt password block in place
+
+    // Re-initialize iv so password encryption is consistent
+    gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 	error = gcry_cipher_encrypt(handle->crypt_handle, password_block, password_block_length, NULL, 0);
 	if(error)
 	{
@@ -326,6 +329,9 @@ int write_handle(db_handle_t *handle)
 	{
 		return DB_FILE_OPEN_ERROR;
 	}
+
+    // Re-initialize iv so header encryption is consistent
+    gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 	
 	// Salt and IV are stored at beginning of file
 	fwrite(handle->salt, 1, SALT_LENGTH, outfile);
@@ -339,7 +345,7 @@ int write_handle(db_handle_t *handle)
 	memcpy(db_header, &magic, sizeof(uint32_t));
 	memcpy(db_header + sizeof(uint32_t), &(handle->num_records), sizeof(handle->num_records));
 	memcpy(db_header + sizeof(uint32_t) + sizeof(handle->num_records), &(handle->last_edit), sizeof(handle->last_edit));
-	
+
 	error = gcry_cipher_encrypt(handle->crypt_handle, db_header, AES_BLOCK_LENGTH, NULL, 0);
 	if(error)
 	{
@@ -394,6 +400,8 @@ char * get_pass(char *name, db_handle_t *handle)
 {
 	pass_header_t header;
 	
+    // Check if record exists
+
 	int isfound = 0;
 	int i;
 	for(i = 0; i < handle->num_records; i++)
@@ -409,10 +417,14 @@ char * get_pass(char *name, db_handle_t *handle)
 	{
 		return NULL;
 	}
-	
+
 	char *pass_buff = malloc(header.size);
 	memcpy(pass_buff, handle->pass_data + header.record_start, header.size);
 	
+    // Decrypt password record
+
+    // Re-initialize iv so password encryption is consistent
+    gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 	error = gcry_cipher_decrypt(handle->crypt_handle, pass_buff, header.size, NULL, 0);
 	if(error)
 	{
