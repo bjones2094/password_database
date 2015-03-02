@@ -1,32 +1,24 @@
 #include "pass_safe.h"
+#include "pass_defines.h"
+#include <stdlib.h>
+#include <time.h>
+#include <gcrypt.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <string.h>
 
 // Initialize libgcrypt library
 void init_gcrypt()
 {
 	if(!gcry_check_version (GCRYPT_VERSION))
 	{
-		fputs("!!! libgcrypt version mismatch !!!\n", stderr);
+        fputs("libgcrypt version mismatch\n", stderr);
 		exit(EXIT_FAILURE);
 	}
 	
 	gcry_control(GCRYCTL_SUSPEND_SECMEM_WARN);
 	gcry_control(GCRYCTL_INIT_SECMEM, 16384, 0);
 	gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
-}
-
-// Generate an AES256 key from a password
-char * generate_key(char *password, char *salt)
-{
-	char *digest = malloc(KEY_SIZE);
-	gcry_md_hash_buffer(GCRY_MD_SHA256, digest, password, strlen(password));
-	
-	int i;
-	for(i = 0; i < KEY_SIZE; i++)
-	{
-		digest[i] ^= salt[i];
-	}
-	
-	return digest;
 }
 
 // Generate a random password length bytes long
@@ -68,8 +60,10 @@ int create_pass_db(char *filename, char *password, db_handle_t *handle)
 	// Generate random initialization vector for encrypting
 	char iv[IV_LENGTH];
 	gcry_randomize(iv, IV_LENGTH, GCRY_STRONG_RANDOM);
-		
-	char *key = generate_key(password, salt);
+
+    // Derive encryption key using scrypt algorithm
+    char *key = malloc(KEY_SIZE);
+    gcry_kdf_derive(password, strlen(password), GCRY_KDF_SCRYPT, KEY_GEN_N, salt, SALT_LENGTH, KEY_GEN_P, KEY_SIZE, key);
 		
 	// Initialize cipher handle for encryption/decryption
 	gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
@@ -129,7 +123,9 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		handle->iv = malloc(IV_LENGTH);
 		fread(handle->iv, sizeof(char), IV_LENGTH, infile);
 		
-		char *key = generate_key(password, handle->salt);
+        // Derive encryption key using scrypt algorithm
+        char *key = malloc(KEY_SIZE);
+        gcry_kdf_derive(password, strlen(password), GCRY_KDF_SCRYPT, KEY_GEN_N, handle->salt, SALT_LENGTH, KEY_GEN_P, KEY_SIZE, key);
 		
 		// Initialize cipher handle for encryption/decryption
 		gcry_cipher_open(&(handle->crypt_handle), GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
@@ -163,7 +159,6 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		
 		handle->filename = malloc(strlen(infilename) + 1);
 		strcpy(handle->filename, infilename);
-		handle->last_edit = time(NULL);
 		
 		if(handle->num_records > 0)
 		{
@@ -198,6 +193,7 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		}
 		else
 		{
+			handle->pass_headers = NULL;
 			handle->pass_data = NULL;
 			handle->pass_data_size = 0;
 		}
@@ -208,11 +204,11 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 // Add a new password record to an exisiting database
 int create_db_record(char *name, int pass_size, db_handle_t *handle)
 {
-	if(find_record(name, handle))
+	if(find_record(name, handle) != -1)
 	{
 		return DB_RECORD_EXISTS;
 	}
-	else if(handle->num_records == 1000)
+    else if(handle->num_records == 1000)    // Each db can only hold 1000 records
 	{
 		return DB_RECORD_LIMIT_REACHED;
 	}
@@ -228,6 +224,7 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 		new_pass_header.name[i] = '\0';
 	}
 	
+    // Start of new record is at end of current password block
 	new_pass_header.record_start = handle->pass_data_size;
 	
 	// Generate random password
@@ -284,7 +281,7 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 int delete_db_record(char *name, db_handle_t *handle)
 {
 	int location;
-	if(location = find_record(name, handle))
+    if((location = find_record(name, handle)) == -1)
 	{
 		return DB_RECORD_NOT_FOUND;
 	}
@@ -432,12 +429,12 @@ int find_record(char *name, db_handle_t *handle)
 	int i;
 	for(i = 0; i < handle->num_records; i++)
 	{
-		if(!strcmp(name, handle->pass_headers[i].name))
+		if(strcmp(name, handle->pass_headers[i].name) == 0)
 		{
 			return i;
 		}
 	}
-	return 0;
+	return -1;
 }
 
 // List all password records within an opened database
@@ -454,4 +451,14 @@ int list_records(db_handle_t *handle)
 		printf("%s\n", handle->pass_headers[i].name);
 	}
 	return 0;
+}
+
+// Print information about database contents
+void print_db_info(db_handle_t *handle)
+{
+    char *last_edit = ctime(&(handle->last_edit));
+
+    printf("\nFile Name: %s\n", handle->filename);
+    printf("Number of Records: %u\n", handle->num_records);
+    printf("Last Edited: %s\n", last_edit);
 }
