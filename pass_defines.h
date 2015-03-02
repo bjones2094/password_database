@@ -2,7 +2,7 @@
 #define PASS_DEFINES_H
 
 // Tuning parameters for scrypt key gen
-#define KEY_GEN_N 65536
+#define KEY_GEN_N 262144
 #define KEY_GEN_P 1
 
 // Input definitions
