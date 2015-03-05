@@ -13,7 +13,9 @@ gcry_error_t error;
 typedef struct pass_header
 {
 	char name[32];
-	uint64_t size;
+    uint64_t pass_size;
+    uint64_t create_time;
+    uint64_t record_size;
 	uint64_t record_start;
 } pass_header_t;
 

@@ -132,13 +132,14 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		gcry_cipher_setkey(handle->crypt_handle, key, KEY_SIZE);
 		gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
 		
+        memset(key, 0, KEY_SIZE);
 		free(key);
 		
 		// Read and decrypt database header from next 16 bytes
-		char db_header[AES_BLOCK_LENGTH];
-		fread(db_header, AES_BLOCK_LENGTH, 1, infile);
+        char db_header[DB_HEADER_LENGTH];
+        fread(db_header, DB_HEADER_LENGTH, 1, infile);
 		
-		error = gcry_cipher_decrypt(handle->crypt_handle, db_header, AES_BLOCK_LENGTH, NULL, 0);
+        error = gcry_cipher_decrypt(handle->crypt_handle, db_header, DB_HEADER_LENGTH, NULL, 0);
 		if(error)
 		{
 			printf("%s\n", gcry_strerror(error));
@@ -163,25 +164,34 @@ int open_pass_db(char *infilename, char *password, db_handle_t *handle)
 		if(handle->num_records > 0)
 		{
 			// Read and decrypt password header data into pass_header structs
+
 			handle->pass_headers = malloc(sizeof(pass_header_t) * handle->num_records);
-			char header_block[AES_BLOCK_LENGTH * 3];
+            char header_block[PASS_HEADER_LENGTH];
 			
 			int i;
 			for(i = 0; i < handle->num_records; i++)
 			{
-				fread(header_block, AES_BLOCK_LENGTH, 3, infile);
+                fread(header_block, PASS_HEADER_LENGTH, 1, infile);
 				
-				error = gcry_cipher_decrypt(handle->crypt_handle, header_block, AES_BLOCK_LENGTH * 3, NULL, 0);
+                error = gcry_cipher_decrypt(handle->crypt_handle, header_block, PASS_HEADER_LENGTH, NULL, 0);
 				if(error)
 				{
 					printf("%s\n", gcry_strerror(error));
 					exit(EXIT_FAILURE);
 				}
 				
-				pass_header_t *p_head = &handle->pass_headers[i];
+                pass_header_t *p_head = &handle->pass_headers[i];
+
+                int pass_size_offset = sizeof(p_head->name);
+                int create_time_offset = pass_size_offset + sizeof(p_head->pass_size);
+                int record_size_offset = create_time_offset + sizeof(p_head->create_time);
+                int record_start_offset = record_size_offset + sizeof(p_head->record_size);
+
 				memcpy(p_head->name, header_block, sizeof(p_head->name));
-				memcpy(&(p_head->size), header_block + sizeof(p_head->name), sizeof(p_head->size));
-				memcpy(&(p_head->record_start), header_block + sizeof(p_head->name) + sizeof(p_head->size), sizeof(p_head->record_start));
+                memcpy(&(p_head->pass_size), header_block + pass_size_offset, sizeof(p_head->pass_size));
+                memcpy(&(p_head->create_time), header_block + create_time_offset, sizeof(p_head->create_time));
+                memcpy(&(p_head->record_size), header_block + record_size_offset, sizeof(p_head->record_size));
+                memcpy(&(p_head->record_start), header_block + record_start_offset, sizeof(p_head->record_start));
 			}
 			
 			// Read encrypted password data into handle
@@ -226,7 +236,10 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 	
     // Start of new record is at end of current password block
 	new_pass_header.record_start = handle->pass_data_size;
-	
+
+    new_pass_header.pass_size = pass_size;
+    new_pass_header.create_time = time(NULL);
+
 	// Generate random password
 	unsigned char *password_block;
 	int password_block_length = generate_pass(&password_block, pass_size);
@@ -261,7 +274,7 @@ int create_db_record(char *name, int pass_size, db_handle_t *handle)
 	free(password_block);
 	
 	// Add new password header to handle headers
-	new_pass_header.size = password_block_length;
+    new_pass_header.record_size = password_block_length;
 	if(handle->num_records == 0)
 	{
 		handle->pass_headers = malloc(sizeof(pass_header_t));
@@ -290,10 +303,10 @@ int delete_db_record(char *name, db_handle_t *handle)
 	}
 	
 	pass_header_t header = handle->pass_headers[location];
-	int record_end = header.record_start + header.size;
+    int record_end = header.record_start + header.record_size;
 	
 	// Remove password data from handle
-	char *new_pass_data = malloc(handle->pass_data_size - header.size);
+    char *new_pass_data = malloc(handle->pass_data_size - header.record_size);
 	memcpy(new_pass_data, handle->pass_data, header.record_start);
 	memcpy(new_pass_data, handle->pass_data + record_end, handle->pass_data_size - record_end);
 	
@@ -310,7 +323,7 @@ int delete_db_record(char *name, db_handle_t *handle)
 	for(i = location; i < handle->num_records - 1; i++)
 	{
 		new_headers[i] = handle->pass_headers[i + 1];
-		new_headers[i].record_start -= header.size;	// Fix header record starts
+        new_headers[i].record_start -= header.record_size;	// Fix header record starts
 	}
 	
 	free(handle->pass_headers);
@@ -356,22 +369,29 @@ int write_handle(db_handle_t *handle)
 	
 	// Write encrypted password headers to file
 	int i;
-	char pass_header[AES_BLOCK_LENGTH * 3];
+    char pass_header[PASS_HEADER_LENGTH];
 	for(i = 0; i < handle->num_records; i++)
 	{
 		pass_header_t p_head = handle->pass_headers[i];
 		
+        int pass_size_offset = sizeof(p_head.name);
+        int create_time_offset = pass_size_offset + sizeof(p_head.pass_size);
+        int record_size_offset = create_time_offset + sizeof(p_head.create_time);
+        int record_start_offset = record_size_offset + sizeof(p_head.record_size);
+
 		memcpy(pass_header, p_head.name, sizeof(p_head.name));
-		memcpy(pass_header + sizeof(p_head.name), &(p_head.size), sizeof(p_head.size));
-		memcpy(pass_header + sizeof(p_head.name) + sizeof(p_head.size), &(p_head.record_start), sizeof(p_head.record_start));
+        memcpy(pass_header + pass_size_offset, &(p_head.pass_size), sizeof(p_head.pass_size));
+        memcpy(pass_header + create_time_offset, &(p_head.create_time), sizeof(p_head.create_time));
+        memcpy(pass_header + record_size_offset, &(p_head.record_size), sizeof(p_head.record_size));
+        memcpy(pass_header + record_start_offset, &(p_head.record_start), sizeof(p_head.record_start));
 		
-		error = gcry_cipher_encrypt(handle->crypt_handle, pass_header, AES_BLOCK_LENGTH * 3, NULL, 0);
+        error = gcry_cipher_encrypt(handle->crypt_handle, pass_header, PASS_HEADER_LENGTH, NULL, 0);
 		if(error)
 		{
 			printf("%s\n", gcry_strerror(error));
 			exit(EXIT_FAILURE);
 		}
-		fwrite(pass_header, AES_BLOCK_LENGTH, 3, outfile);
+        fwrite(pass_header, PASS_HEADER_LENGTH, 1, outfile);
 	}
 	
 	// Write encrypted password data to file
@@ -418,14 +438,14 @@ char * get_pass(char *name, db_handle_t *handle)
 		return NULL;
 	}
 
-	char *pass_buff = malloc(header.size);
-	memcpy(pass_buff, handle->pass_data + header.record_start, header.size);
+    char *pass_buff = malloc(header.record_size);
+    memcpy(pass_buff, handle->pass_data + header.record_start, header.record_size);
 	
     // Decrypt password record
 
     // Re-initialize iv so password encryption is consistent
     gcry_cipher_setiv(handle->crypt_handle, handle->iv, IV_LENGTH);
-	error = gcry_cipher_decrypt(handle->crypt_handle, pass_buff, header.size, NULL, 0);
+    error = gcry_cipher_decrypt(handle->crypt_handle, pass_buff, header.record_size, NULL, 0);
 	if(error)
 	{
 		printf("%s\n", gcry_strerror(error));
@@ -457,11 +477,17 @@ int list_records(db_handle_t *handle)
 		return DB_NO_RECORDS;
 	}
 	
+    printf("\n");
 	int i;
 	for(i = 0; i < handle->num_records; i++)
 	{
-		printf("%s\n", handle->pass_headers[i].name);
+        char *create_time = ctime(&(handle->pass_headers[i].create_time));
+
+        printf("Name: %s | ", handle->pass_headers[i].name);
+        printf("%lu characters long\n", handle->pass_headers[i].pass_size);
+        printf("Created: %s\n", create_time);
 	}
+    printf("\n");
 	return 0;
 }
 

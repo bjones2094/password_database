@@ -17,6 +17,8 @@
 #define IV_LENGTH 16
 #define AES_BLOCK_LENGTH 16
 #define MAGIC_DB_CONSTANT 0xD00DBABE
+#define DB_HEADER_LENGTH 16
+#define PASS_HEADER_LENGTH 64
 
 /* --- Error code definitions --- */
 
