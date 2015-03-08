@@ -12,29 +12,29 @@ gcry_error_t error;
 
 typedef struct pass_header
 {
-	char name[32];
+    char name[32];
     uint64_t pass_size;
     uint64_t create_time;
     uint64_t record_size;
-	uint64_t record_start;
+    uint64_t record_start;
 } pass_header_t;
 
 // Struct to hold current state of an opened database
 
 typedef struct db_handle
 {
-	char *filename;
-	uint32_t num_records;
-	uint64_t last_edit;
-	
-	char *salt;
-	char *iv;
-	
-	pass_header_t *pass_headers;
-	char *pass_data;
-	long pass_data_size;
-	
-	gcry_cipher_hd_t crypt_handle;
+    char *filename;
+    uint32_t num_records;
+    uint64_t last_edit;
+    
+    char *salt;
+    char *iv;
+    
+    pass_header_t *pass_headers;
+    char *pass_data;
+    long pass_data_size;
+    
+    gcry_cipher_hd_t crypt_handle;
 } db_handle_t;
 
 void init_gcrypt();
