@@ -11,3 +11,6 @@ database).
 The encryption of the databases is handled using the AES256 
 implementation provided by libgcrypt. This means that building and 
 running the binary requires access to this shared library.
+#Database Format
+The format for the encrypted database files can be seen in the graphic below:
+![DB_FORMAT](pass.png?raw=true "Database Format")
