@@ -14,3 +14,5 @@ running the binary requires access to this shared library.
 #Database Format
 The format for the encrypted database files can be seen in the graphic below:
 ![DB_FORMAT](pass.png?raw=true "Database Format")
+#Disclaimer
+This software is being created as an educational project, and should not be used to protect sensitive data. There is no guarantee of security through this software.
