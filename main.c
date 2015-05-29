@@ -75,9 +75,6 @@ void handle_errors(int error_code)
 
 int main(int argc, char **argv)
 {
-    char *commands[] = { "create", "get", "add", "remove", "list", "info" };
-    int num_comms = 6;
-
     init_gcrypt();
     
     if(argc == 2 && strcmp(argv[1], "help") == 0)
@@ -263,6 +260,8 @@ int main(int argc, char **argv)
         printf("\nError: Invalid command\nType '<program> help' to get list of commands and proper usage\n\n");
         return 1;
     }
+	
+	memset(password, 0, MAX_PASS_LENGTH);
     
     return 0;
 }
